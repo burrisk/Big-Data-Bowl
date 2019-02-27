@@ -189,6 +189,20 @@ feasible_route_NLEQ <- function(start_pos, end_pos, bounds, inits, clockwise_tur
     exp(initial_solns$x[2])), "convergence" = convergence)
 }
 
+feasible_straight_route <- function(start_pos, end_pos, bounds, inits){
+  x0 <- start_pos[1]; y0 <- start_pos[2]; x1 <- end_pos[1]; y1 <- end_pos[2]
+  decel_constant <- bounds[1]; accel_constant <- bounds[2]; max_speed <- bounds[3]; max_ca <- bounds[4]
+  init_speed <- inits[1]; init_angle <- inits[2]
+  
+  turn_speed <- init_speed / 10; turn_radius <- 2 * turn_speed ^ 2 / max_ca
+  f <- function(accel_time){
+    sum((displacement(c(init_speed, turn_radius, 0, accel_time), bounds, inits)$objective -
+           (end_pos - start_pos))^2)
+  }
+  list("route" = c(init_speed, turn_radius, 0, optimize(f, c(0, 1e2))$minimum),
+       "convergence" = T)
+}
+
 min_time <- function(start_pos, end_pos, bounds, inits){
   x0 <- start_pos[1]; y0 <- start_pos[2]; x1 <- end_pos[1]; y1 <- end_pos[2]
   init_speed <- inits[1]; init_angle <- inits[2]
@@ -200,7 +214,12 @@ min_time <- function(start_pos, end_pos, bounds, inits){
   }
   angle_with_velocity <- find_angle(diff_x, diff_y, init_angle)
   clockwise_turn <- 2 * (angle_with_velocity < 0) - 1
-  route_init <- feasible_route_BFGS(start_pos, end_pos, bounds, inits, clockwise_turn)
+  if (round(angle_with_velocity, 8) == 0){
+    route_init <- feasible_straight_route(start_pos, end_pos, bounds, inits)
+    return(list("route" = route_init$route, "time" = route_init$route[4], "init_fail" = F))
+  } else{
+    route_init <- feasible_route_BFGS(start_pos, end_pos, bounds, inits, clockwise_turn)
+  }
   if (route_init$convergence == 0){
     return(list("route" = rep(NA, 4), "time" = NA, "init_fail" = T))
   }
@@ -218,7 +237,7 @@ min_time <- function(start_pos, end_pos, bounds, inits){
               (end_pos - start_pos))) > 0.1){
     return(list("route" = rep(NA, 4), "time" = NA, "init_fail" = F))
   }
-  if (sum(solution$solution == route_init$route) == 4){
+  if (sum(solution$solution == route_init$route) == 4 & !(straight_route)){
     return(list("route" = rep(NA, 4), "time" = NA, "init_fail" = F))
   }
   
@@ -229,8 +248,8 @@ min_time <- function(start_pos, end_pos, bounds, inits){
 create_timeplot <- function(distance, bounds){
   start_pos <- c(10.3, 27.2)
   end_pos <- c(10.3 + distance, 27.2)
-  speeds <- seq(0.2, bounds[3], length = 20)
-  angle <- seq(-pi, pi, length = 20)
+  speeds <- seq(0.2, bounds[3], length = 21)
+  angle <- seq(-pi, pi, length = 21)
   df_inits <- as.matrix(expand.grid(speeds, angle))
   df_times <- sapply(1:nrow(df_inits), function(i){
     inits <- df_inits[i, ]
@@ -247,40 +266,9 @@ create_timeplot <- function(distance, bounds){
     scale_fill_distiller(palette = "Spectral", direction = 1, name = "Time (s)") +
     coord_polar(start = pi) +
     xlab("Initial Angle (degrees)") +
-    ylab("Initial Velocity (m/s)")  +
+    ylab("Initial Velocity (y/s)")  +
     theme(axis.text = element_text(size = 14),
           axis.title = element_text(size = 16, face = "bold"))
   list("g" = g, "data" = df_plot)
 }
 
-bounds <- c(2, 2, 9, 2 * pi)
-plot2 <- create_timeplot(2, bounds)
-plot5 <- create_timeplot(5, bounds)
-plot15 <- create_timeplot(15, bounds)
-plot40 <- create_timeplot(40, bounds)
-
-ggsave("figures/2yards.pdf", plot2$g, device = "pdf")
-ggsave("figures/5yards.pdf", plot5$g, device = "pdf")
-ggsave("figures/15yards.pdf", plot15$g, device = "pdf")
-ggsave("figures/40yards.pdf", plot40$g, device = "pdf")
-
-
-min_time_dist <- function(distance, velocity, angle, bounds){
-  start_pos <- c(10.3, 27.2)
-  end_pos <- c(10.3 + distance, 27.2)
-  inits <- c(velocity, angle)
-  time <- min_time(start_pos, end_pos, bounds, inits)$time
-  time
-}
-
-
-# Fit Neural Network
-N <- 15000
-x <- rtruncnorm(N, a = 0, b = Inf, mean = 20, sd = 20)
-y <- runif(N, -pi, pi)
-v <- runif(N, 0.05, bounds[3])
-z <- sapply(1:N, function(i){
-  min_time_dist(x[i], v[i], y[i], bounds)
-})
-mat <- tibble(distance = x, speed = v, angle = y, time = z)
-write_csv(mat, "speed_est.csv")
